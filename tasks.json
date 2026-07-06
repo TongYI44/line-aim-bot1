@@ -1,0 +1,30 @@
+{
+  "monday": {
+    "text": "- ประชุมทีมตอน 9:00 น.\n- ส่งรายงานประจำสัปดาห์\n- ออกกำลังกาย 30 นาที",
+    "image_url": "https://example.com/images/monday.jpg"
+  },
+  "tuesday": {
+    "text": "- ตรวจสอบอีเมลค้าง\n- ทบทวนงบประมาณเดือนนี้",
+    "image_url": "https://example.com/images/tuesday.jpg"
+  },
+  "wednesday": {
+    "text": "- อัปเดตความคืบหน้าโปรเจกต์\n- นัดหมายลูกค้า 14:00 น.",
+    "image_url": "https://example.com/images/wednesday.jpg"
+  },
+  "thursday": {
+    "text": "- เตรียมสไลด์นำเสนอ\n- ซื้อของใช้ที่จำเป็น",
+    "image_url": "https://example.com/images/thursday.jpg"
+  },
+  "friday": {
+    "text": "- สรุปงานประจำสัปดาห์\n- วางแผนงานสัปดาห์หน้า",
+    "image_url": "https://example.com/images/friday.jpg"
+  },
+  "saturday": {
+    "text": "- พักผ่อน\n- ทำความสะอาดบ้าน",
+    "image_url": "https://example.com/images/saturday.jpg"
+  },
+  "sunday": {
+    "text": "- เตรียมตัวสำหรับสัปดาห์หน้า\n- อ่านหนังสือ 1 บท",
+    "image_url": "https://example.com/images/sunday.jpg"
+  }
+}
