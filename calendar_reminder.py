@@ -175,6 +175,11 @@ def main():
         sys.exit(1)
 
     events = fetch_todays_events(service_account_json, calendar_id)
+
+    # DEBUG: พิมพ์ข้อมูลดิบของแต่ละ event เพื่อเช็คว่า Google Calendar ส่ง location มาจริงไหม
+    for e in events:
+        print(f"[DEBUG] summary={e.get('summary')!r} location={e.get('location')!r}", file=sys.stderr)
+
     task_text = build_task_text(events)
     messages = build_messages(task_text)
     send_line_push(access_token, user_id, messages)
