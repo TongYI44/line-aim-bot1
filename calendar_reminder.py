@@ -28,6 +28,8 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 THAI_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+THAI_MONTHS=["","มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"]
+
 
 
 def now_in_bangkok() -> datetime.datetime:
@@ -97,14 +99,34 @@ def format_event_line(event: dict) -> str:
 
 
 def build_task_text(events: list) -> str:
-    today_str = now_in_bangkok().strftime("%d/%m/%Y")
-
+    now=now_in_bangkok()
+    thai_date=f"{now.day} {THAI_MONTHS[now.month]} {now.year+543}"
     if not events:
-        return f"📌 งานวันนี้ ({today_str})\n\nวันนี้ไม่มีกิจกรรมในปฏิทิน 🎉"
+        return f"📅 แจ้งเตือนตารางงาน
 
-    lines = [format_event_line(e) for e in events]
-    return f"📌 งานวันนี้ ({today_str})\n\n" + "\n".join(lines)
+📆 วันที่ {thai_date}
 
+ไม่มีตารางงานที่กำหนดไว้สำหรับวันนี้"
+    msg=f"📅 แจ้งเตือนตารางงาน
+
+📆 วันที่ {thai_date}
+
+"
+    for event in events:
+        building=event.get("summary","-")
+        room=event.get("location","-")
+        if "dateTime" in event["start"]:
+            st=datetime.datetime.fromisoformat(event["start"]["dateTime"]).astimezone(BANGKOK_TZ)
+            en=datetime.datetime.fromisoformat(event["end"]["dateTime"]).astimezone(BANGKOK_TZ)
+            t=f"{st.strftime('%H:%M')} - {en.strftime('%H:%M')}"
+        else:
+            t="ทั้งวัน"
+        msg+=f"🏢 สถานที่: {building}
+🏫 ห้อง: {room}
+🕒 เวลา: {t}
+
+"
+    return msg.strip()
 
 def get_image_url() -> str | None:
     """หา URL รูปภาพที่จะแนบ: จาก env var ก่อน แล้วค่อย fallback ไปที่ image_by_weekday.json"""
