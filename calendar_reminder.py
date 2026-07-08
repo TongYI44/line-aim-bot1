@@ -64,18 +64,36 @@ def fetch_todays_events(service_account_json: str, calendar_id: str) -> list:
 
 
 def format_event_line(event: dict) -> str:
-    """แปลง event หนึ่งรายการเป็นข้อความ 1 บรรทัด เช่น '09:00 - ประชุมทีม'"""
+    """แปลง event หนึ่งรายการเป็นข้อความ 1 บรรทัด
+    ถ้ามีเวลาสิ้นสุด: '- 13:00-16:00 น. ประชุมทีม (ห้อง 302-303)'
+    ถ้าไม่มีเวลาสิ้นสุด: '- 09:00 น. ประชุมทีม (ห้อง 302-303)'"""
     start = event.get("start", {})
+    end = event.get("end", {})
     summary = event.get("summary", "(ไม่มีชื่อกิจกรรม)")
+    location = event.get("location", "").strip()
+    location_str = f" ({location})" if location else ""
 
     if "dateTime" in start:
         # กิจกรรมที่มีเวลาเริ่มต้น
-        dt = datetime.datetime.fromisoformat(start["dateTime"])
-        time_str = dt.strftime("%H:%M")
-        return f"- {time_str} น. {summary}"
+        start_dt = datetime.datetime.fromisoformat(start["dateTime"])
+        start_str = start_dt.strftime("%H:%M")
+
+        end_str = None
+        if "dateTime" in end:
+            end_dt = datetime.datetime.fromisoformat(end["dateTime"])
+            candidate = end_dt.strftime("%H:%M")
+            if candidate != start_str:  # มีเวลาสิ้นสุดจริง ไม่ใช่ค่าเดียวกับเวลาเริ่ม
+                end_str = candidate
+
+        if end_str:
+            time_str = f"{start_str}-{end_str}"
+        else:
+            time_str = start_str
+
+        return f"- {time_str} น. {summary}{location_str}"
     else:
         # กิจกรรมแบบทั้งวัน (all-day event)
-        return f"- (ทั้งวัน) {summary}"
+        return f"- (ทั้งวัน) {summary}{location_str}"
 
 
 def build_task_text(events: list) -> str:
