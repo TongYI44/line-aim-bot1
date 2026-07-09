@@ -1,0 +1,31 @@
+name: Daily LINE Reminder (Google Calendar)
+
+on:
+  schedule:
+    # รันทุกวันเวลา 07:00 น. เวลาไทย (UTC+7) => 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}   # ให้กดรันเองได้จากหน้า Actions เพื่อทดสอบ
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests google-auth google-api-python-client
+
+      - name: Send LINE reminder from Google Calendar
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
+          REMINDER_IMAGE_URL: ${{ secrets.REMINDER_IMAGE_URL }}
+        run: python calendar_reminder.py
