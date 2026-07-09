@@ -1,0 +1,35 @@
+name: Daily Reminder
+
+on:
+  schedule:
+    # 07:30 ประเทศไทย (UTC+7 = 00:30 UTC)
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-reminder
+  cancel-in-progress: true
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run reminder
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_GROUP_ID: ${{ secrets.LINE_GROUP_ID }}
+        run: python send_reminder.py
