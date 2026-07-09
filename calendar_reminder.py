@@ -53,6 +53,33 @@ def fetch_todays_events(service_account_json, calendar_id):
     ).execute()
     return events_result.get("items", [])
 
+def extract_room(event):
+    """
+    หาชื่อ 'ห้อง' ของกิจกรรม โดยลองตามลำดับนี้:
+    1. ห้องที่ถูกจองผ่าน Google Calendar Rooms/Resources
+       (ปรากฏใน attendees ที่มี resource: true)
+    2. รูปแบบคำว่า 'ห้อง...' ที่ปรากฏใน location / summary / description
+    """
+    for attendee in event.get("attendees", []):
+        if attendee.get("resource"):
+            return attendee.get("displayName") or attendee.get("email", "-")
+
+    text_fields = [
+        event.get("location", ""),
+        event.get("summary", ""),
+        event.get("description", ""),
+    ]
+    room_pattern = re.compile(r"ห้อง\s*[\wก-๙\.\-/]+")
+    for text in text_fields:
+        if not text:
+            continue
+        match = room_pattern.search(text)
+        if match:
+            return match.group(0).strip()
+
+    return "-"
+
+
 def build_message(events):
     now = now_in_bangkok()
     thai_date = f"{now.day} {THAI_MONTHS[now.month]} {now.year + 543}"
@@ -64,13 +91,19 @@ def build_message(events):
     for event in events:
         summary = event.get("summary", "(ไม่มีชื่อกิจกรรม)")
         location = event.get("location", "-")
+        room = extract_room(event)
         start = event.get("start", {})
         if "dateTime" in start:
             st = datetime.datetime.fromisoformat(start["dateTime"]).astimezone(BANGKOK_TZ)
             time_str = st.strftime('%H:%M น.')
         else:
             time_str = "ตลอดทั้งวัน"
-        msg += f"📌 กิจกรรม: {summary}\n📍 สถานที่: {location}\n🕒 เวลา: {time_str}\n\n"
+        msg += (
+            f"📌 กิจกรรม: {summary}\n"
+            f"🚪 ห้อง: {room}\n"
+            f"📍 สถานที่: {location}\n"
+            f"🕒 เวลา: {time_str}\n\n"
+        )
     return msg.strip()
 
 def send_line(token, user_id, text):
