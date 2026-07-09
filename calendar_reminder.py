@@ -1,23 +1,20 @@
+# VERSION 3 - FIXED STRIP AND CLEANING
 """
 ดึงกิจกรรม/งานของ "วันนี้" จาก Google Calendar แล้วส่งแจ้งเตือนพร้อมรูปภาพ ไปยัง LINE
-ผ่าน LINE Messaging API (push message)
 """
 
 from __future__ import annotations
-
 import os
 import sys
 import json
 import datetime
 import requests
 from zoneinfo import ZoneInfo
-
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-
 THAI_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok" )
 THAI_MONTHS = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
@@ -88,9 +85,9 @@ def build_messages(task_text: str) -> list:
     return messages
 
 def send_line_push(access_token: str, to: str, messages: list) -> None:
-    # ล้างค่าช่องว่างหรือตัวอักษรแปลกปลอมใน Token และ ID อีกครั้งก่อนส่ง
-    clean_token = access_token.strip()
-    clean_to = to.strip()
+    # ทำความสะอาดค่า Token ป้องกันช่องว่างและตัวอักษรแปลกปลอม
+    clean_token = "".join(access_token.split())
+    clean_to = "".join(to.split())
     
     headers = {
         "Content-Type": "application/json",
@@ -104,7 +101,7 @@ def send_line_push(access_token: str, to: str, messages: list) -> None:
     print("[OK] ส่งข้อความแจ้งเตือนสำเร็จ")
 
 def main():
-    # ดึงค่าและทำความสะอาดข้อมูลทันที
+    # ดึงค่าและล้างค่าขยะทันที
     access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
     user_id = os.environ.get("LINE_USER_ID", "").strip()
     service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
