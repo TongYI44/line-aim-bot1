@@ -26,11 +26,7 @@ def load_today_task(tasks_path: str) -> dict:
     with open(tasks_path, "r", encoding="utf-8") as f:
         tasks = json.load(f)
 
-    # กำหนด timezone เป็น Asia/Bangkok เพื่อให้ได้วันในสัปดาห์ที่ถูกต้อง
-    from zoneinfo import ZoneInfo
-    bangkok_tz = ZoneInfo("Asia/Bangkok")
-    today_key = THAI_WEEKDAYS[datetime.datetime.now(bangkok_tz).weekday()]
-    
+    today_key = THAI_WEEKDAYS[datetime.datetime.now().weekday()]
     today_task = tasks.get(today_key)
 
     if not today_task:
@@ -41,17 +37,21 @@ def load_today_task(tasks_path: str) -> dict:
 
 def build_messages(task: dict) -> list:
     """สร้าง message payload: ข้อความ + รูปภาพ (ถ้ามี)"""
-    # กำหนด timezone เป็น Asia/Bangkok เพื่อให้วันที่ถูกต้องไม่ว่าจะรันที่ไหน
-    from zoneinfo import ZoneInfo
-    bangkok_tz = ZoneInfo("Asia/Bangkok")
-    now = datetime.datetime.now(bangkok_tz)
-    
-    thai_months = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
-    today_str = f"{now.day} {thai_months[now.month]} {now.year + 543}"
-    
-    text = f"📅 แจ้งเตือนงานประจำวัน\n\n📆 วันที่ {today_str}\n\n{task['text']}"
+    today_str = datetime.datetime.now().strftime("%d/%m/%Y")
+    text = f"📌 งานวันนี้ ({today_str})\n\n{task['text']}"
 
     messages = [{"type": "text", "text": text}]
+
+    image_url = task.get("image_url")
+    if image_url:
+        messages.append(
+            {
+                "type": "image",
+                "originalContentUrl": image_url,
+                "previewImageUrl": task.get("preview_url", image_url),
+            }
+        )
+
     return messages
 
 
@@ -72,8 +72,8 @@ def send_line_push(access_token: str, to: str, messages: list) -> None:
 
 
 def main():
-    access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-    user_id = os.environ.get("LINE_USER_ID", "").strip()
+    access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.environ.get("LINE_USER_ID")
 
     if not access_token or not user_id:
         print(

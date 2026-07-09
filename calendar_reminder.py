@@ -1,152 +1,166 @@
-# VERSION 5 - ULTIMATE CLEANING & DEBUG
 """
-ดึงกิจกรรมจาก Google Calendar ส่งเข้า LINE
-เวอร์ชันแก้ไขปัญหา InvalidHeader (ช่องว่างใน Token) แบบเด็ดขาด
+ดึงกิจกรรม/งานของ "วันนี้" จาก Google Calendar แล้วส่งแจ้งเตือนพร้อมรูปภาพ ไปยัง LINE
+ผ่าน LINE Messaging API (push message)
+
+การตั้งค่า (environment variables / GitHub Secrets):
+  - LINE_CHANNEL_ACCESS_TOKEN : Channel access token ของ LINE OA
+  - LINE_USER_ID              : userId ของคนที่จะรับข้อความ
+  - GOOGLE_SERVICE_ACCOUNT_JSON : เนื้อหาไฟล์ credentials.json ของ Service Account (ทั้งไฟล์ เป็น string)
+  - GOOGLE_CALENDAR_ID        : Calendar ID ที่จะดึงกิจกรรม (เช่น your_email@gmail.com หรือ id ของปฏิทินที่แชร์ไว้)
+  - REMINDER_IMAGE_URL        : (ไม่บังคับ) URL รูปภาพที่จะแนบไปกับข้อความทุกวัน
+                                ถ้าไม่ตั้งค่า จะดึงจาก image_by_weekday.json แทน (ถ้ามีไฟล์)
 """
+
+from __future__ import annotations
 
 import os
 import sys
 import json
 import datetime
 import requests
-import re
 from zoneinfo import ZoneInfo
+
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- การตั้งค่าพื้นฐาน ---
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+THAI_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
-THAI_MONTHS = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
 
-def clean_secret(value):
-    """ฟังก์ชันล้างค่าขยะใน Token แบบถอนรากถอนโคน"""
-    if not value:
-        return ""
-    # 1. ตัดช่องว่าง หน้า-หลัง
-    value = value.strip()
-    # 2. ลบตัวอักษรควบคุม (Control Characters) เช่น \n, \r, \t ที่อาจแฝงมา
-    value = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', value)
-    # 3. ลบช่องว่างที่อาจจะติดมาในตัว string (ถ้ามี)
-    value = value.replace(" ", "")
-    return value
 
-def now_in_bangkok():
+def now_in_bangkok() -> datetime.datetime:
+    """เวลาปัจจุบัน อ้างอิงโซนเวลาไทยเสมอ ไม่ว่าเครื่องที่รันจะตั้งโซนเวลาอะไรก็ตาม
+    (สำคัญเพราะ GitHub Actions runner ใช้ UTC เป็นค่าเริ่มต้น)"""
     return datetime.datetime.now(BANGKOK_TZ)
 
-def fetch_todays_events(service_account_json, calendar_id):
+
+def get_today_range():
+    """คืนค่าช่วงเวลาเริ่มต้น-สิ้นสุดของวันนี้ (เที่ยงคืนถึงเที่ยงคืน เวลาไทย) แบบ RFC3339"""
+    now = now_in_bangkok()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + datetime.timedelta(days=1)
+    return start_of_day.isoformat(), end_of_day.isoformat()
+
+
+def fetch_todays_events(service_account_json: str, calendar_id: str) -> list:
+    """ดึงกิจกรรมของวันนี้จาก Google Calendar"""
     creds_info = json.loads(service_account_json)
     credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     service = build("calendar", "v3", credentials=credentials)
-    
-    now = now_in_bangkok()
-    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    end_of_day = (now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)).isoformat()
-    
+
+    time_min, time_max = get_today_range()
+
     events_result = service.events().list(
         calendarId=calendar_id,
-        timeMin=start_of_day,
-        timeMax=end_of_day,
+        timeMin=time_min,
+        timeMax=time_max,
         singleEvents=True,
         orderBy="startTime",
     ).execute()
+
     return events_result.get("items", [])
 
-def extract_room(event):
-    """
-    หาชื่อ 'ห้อง' ของกิจกรรม โดยลองตามลำดับนี้:
-    1. ห้องที่ถูกจองผ่าน Google Calendar Rooms/Resources
-       (ปรากฏใน attendees ที่มี resource: true)
-    2. ค่าจากช่อง Location โดยตรง (ผู้ใช้ใช้ช่องนี้เก็บชื่อ/เลขห้องอยู่แล้ว
-       ไม่จำเป็นต้องมีคำว่า 'ห้อง' นำหน้า เช่น '301', 'A', 'ห้องประชุมใหญ่')
-    3. รูปแบบคำว่า 'ห้อง...' ที่ปรากฏใน summary / description (เผื่อพิมพ์แทรกไว้ตรงนั้น)
-    """
-    for attendee in event.get("attendees", []):
-        if attendee.get("resource"):
-            return attendee.get("displayName") or attendee.get("email", "-")
 
-    location = event.get("location", "").strip()
-    if location:
-        return location
+def format_event_line(event: dict) -> str:
+    """แปลง event หนึ่งรายการเป็นข้อความ 1 บรรทัด เช่น '09:00 - ประชุมทีม'"""
+    start = event.get("start", {})
+    summary = event.get("summary", "(ไม่มีชื่อกิจกรรม)")
 
-    room_pattern = re.compile(r"ห้อง\s*[\wก-๙\.\-/]+")
-    for text in [event.get("summary", ""), event.get("description", "")]:
-        if not text:
-            continue
-        match = room_pattern.search(text)
-        if match:
-            return match.group(0).strip()
-
-    return "-"
+    if "dateTime" in start:
+        # กิจกรรมที่มีเวลาเริ่มต้น
+        dt = datetime.datetime.fromisoformat(start["dateTime"])
+        time_str = dt.strftime("%H:%M")
+        return f"- {time_str} น. {summary}"
+    else:
+        # กิจกรรมแบบทั้งวัน (all-day event)
+        return f"- (ทั้งวัน) {summary}"
 
 
-def build_message(events):
-    now = now_in_bangkok()
-    thai_date = f"{now.day} {THAI_MONTHS[now.month]} {now.year + 543}"
-    
+def build_task_text(events: list) -> str:
+    today_str = now_in_bangkok().strftime("%d/%m/%Y")
+
     if not events:
-        return f"📅 แจ้งเตือนตารางงาน\n\n📆 วันที่ {thai_date}\n\nไม่มีตารางงานสำหรับวันนี้"
-    
-    msg = f"📅 แจ้งเตือนตารางงาน\n\n📆 วันที่ {thai_date}\n\n"
-    for event in events:
-        summary = event.get("summary", "(ไม่มีชื่อกิจกรรม)")
-        room = extract_room(event)
-        start = event.get("start", {})
-        if "dateTime" in start:
-            st = datetime.datetime.fromisoformat(start["dateTime"]).astimezone(BANGKOK_TZ)
-            time_str = st.strftime('%H:%M น.')
-        else:
-            time_str = "ตลอดทั้งวัน"
-        msg += (
-            f"📌 กิจกรรม: {summary}\n"
-            f"🚪 ห้อง: {room}\n"
-            f"🕒 เวลา: {time_str}\n\n"
-        )
-    return msg.strip()
+        return f"📌 งานวันนี้ ({today_str})\n\nวันนี้ไม่มีกิจกรรมในปฏิทิน 🎉"
 
-def send_line(token, user_id, text):
-    # ล้างค่าอีกครั้งก่อนส่งเพื่อความชัวร์
-    token = clean_secret(token)
-    user_id = clean_secret(user_id)
-    
+    lines = [format_event_line(e) for e in events]
+    return f"📌 งานวันนี้ ({today_str})\n\n" + "\n".join(lines)
+
+
+def get_image_url() -> str | None:
+    """หา URL รูปภาพที่จะแนบ: จาก env var ก่อน แล้วค่อย fallback ไปที่ image_by_weekday.json"""
+    fixed_url = os.environ.get("REMINDER_IMAGE_URL")
+    if fixed_url:
+        return fixed_url
+
+    image_map_path = os.path.join(os.path.dirname(__file__), "image_by_weekday.json")
+    if os.path.exists(image_map_path):
+        with open(image_map_path, "r", encoding="utf-8") as f:
+            image_map = json.load(f)
+        today_key = THAI_WEEKDAYS[now_in_bangkok().weekday()]
+        return image_map.get(today_key)
+
+    return None
+
+
+def build_messages(task_text: str) -> list:
+    messages = [{"type": "text", "text": task_text}]
+
+    image_url = get_image_url()
+    if image_url:
+        messages.append(
+            {
+                "type": "image",
+                "originalContentUrl": image_url,
+                "previewImageUrl": image_url,
+            }
+        )
+
+    return messages
+
+
+def send_line_push(access_token: str, to: str, messages: list) -> None:
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
+        "Authorization": f"Bearer {access_token}",
     }
-    payload = {
-        "to": user_id,
-        "messages": [{"type": "text", "text": text}]
-    }
-    
-    print(f"[DEBUG] กำลังส่งข้อความ... (Token Length: {len(token)})")
+    payload = {"to": to, "messages": messages}
+
     resp = requests.post(LINE_PUSH_URL, headers=headers, json=payload, timeout=15)
-    
+
     if resp.status_code != 200:
-        print(f"[ERROR] LINE API ตอบกลับ {resp.status_code}: {resp.text}")
+        print(f"[ERROR] LINE API ตอบกลับ {resp.status_code}: {resp.text}", file=sys.stderr)
         sys.exit(1)
-    print("[OK] ส่งข้อความสำเร็จ!")
+
+    print("[OK] ส่งข้อความแจ้งเตือนสำเร็จ")
+
 
 def main():
-    print("--- เริ่มทำงาน (VERSION 5) ---")
-    
-    # ดึงค่าและล้างทันที
-    token = clean_secret(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", ""))
-    user_id = clean_secret(os.environ.get("LINE_USER_ID", ""))
-    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    cal_id = os.environ.get("GOOGLE_CALENDAR_ID", "").strip()
+    access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.environ.get("LINE_USER_ID")
+    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    calendar_id = os.environ.get("GOOGLE_CALENDAR_ID")
 
-    if not all([token, user_id, sa_json, cal_id]):
-        print("[ERROR] ข้อมูล Environment Variables ไม่ครบ")
+    missing = [
+        name
+        for name, val in [
+            ("LINE_CHANNEL_ACCESS_TOKEN", access_token),
+            ("LINE_USER_ID", user_id),
+            ("GOOGLE_SERVICE_ACCOUNT_JSON", service_account_json),
+            ("GOOGLE_CALENDAR_ID", calendar_id),
+        ]
+        if not val
+    ]
+    if missing:
+        print(f"[ERROR] ยังไม่ได้ตั้งค่า environment variable: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        events = fetch_todays_events(sa_json, cal_id)
-        msg_text = build_message(events)
-        send_line(token, user_id, msg_text)
-    except Exception as e:
-        print(f"[ERROR] เกิดข้อผิดพลาด: {str(e)}")
-        sys.exit(1)
+    events = fetch_todays_events(service_account_json, calendar_id)
+    task_text = build_task_text(events)
+    messages = build_messages(task_text)
+    send_line_push(access_token, user_id, messages)
+
 
 if __name__ == "__main__":
     main()
