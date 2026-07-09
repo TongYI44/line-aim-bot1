@@ -1,120 +1,129 @@
-# VERSION 3 - FIXED STRIP AND CLEANING
+# VERSION 5 - ULTIMATE CLEANING & DEBUG
 """
-ดึงกิจกรรม/งานของ "วันนี้" จาก Google Calendar แล้วส่งแจ้งเตือนพร้อมรูปภาพ ไปยัง LINE
+ดึงกิจกรรมจาก Google Calendar ส่งเข้า LINE
+เวอร์ชันแก้ไขปัญหา InvalidHeader (ช่องว่างใน Token) แบบเด็ดขาด
 """
 
-from __future__ import annotations
 import os
 import sys
 import json
 import datetime
 import requests
+import re
 from zoneinfo import ZoneInfo
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+# --- การตั้งค่าพื้นฐาน ---
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-THAI_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-BANGKOK_TZ = ZoneInfo("Asia/Bangkok" )
+BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 THAI_MONTHS = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
 
-def now_in_bangkok() -> datetime.datetime:
+def clean_secret(value):
+    """ฟังก์ชันล้างค่าขยะใน Token แบบถอนรากถอนโคน"""
+    if not value:
+        return ""
+    # 1. ตัดช่องว่าง หน้า-หลัง
+    value = value.strip()
+    # 2. ลบตัวอักษรควบคุม (Control Characters) เช่น \n, \r, \t ที่อาจแฝงมา
+    value = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', value)
+    # 3. ลบช่องว่างที่อาจจะติดมาในตัว string (ถ้ามี)
+    value = value.replace(" ", "")
+    return value
+
+def now_in_bangkok():
     return datetime.datetime.now(BANGKOK_TZ)
 
-def get_today_range():
-    now = now_in_bangkok()
-    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_of_day = start_of_day + datetime.timedelta(days=1)
-    return start_of_day.isoformat(), end_of_day.isoformat()
-
-def fetch_todays_events(service_account_json: str, calendar_id: str) -> list:
+def fetch_todays_events(service_account_json, calendar_id):
     creds_info = json.loads(service_account_json)
     credentials = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     service = build("calendar", "v3", credentials=credentials)
-    time_min, time_max = get_today_range()
+    
+    now = now_in_bangkok()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    end_of_day = (now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)).isoformat()
+    
     events_result = service.events().list(
         calendarId=calendar_id,
-        timeMin=time_min,
-        timeMax=time_max,
+        timeMin=start_of_day,
+        timeMax=end_of_day,
         singleEvents=True,
         orderBy="startTime",
     ).execute()
     return events_result.get("items", [])
 
-def build_task_text(events: list) -> str:
+def build_message(events):
     now = now_in_bangkok()
     thai_date = f"{now.day} {THAI_MONTHS[now.month]} {now.year + 543}"
+    
     if not events:
-        return f"📅 แจ้งเตือนตารางงาน\n\n📆 วันที่ {thai_date}\n\nไม่มีตารางงานที่กำหนดไว้สำหรับวันนี้"
+        return f"📅 แจ้งเตือนตารางงาน\n\n📆 วันที่ {thai_date}\n\nไม่มีตารางงานสำหรับวันนี้"
     
     msg = f"📅 แจ้งเตือนตารางงาน\n\n📆 วันที่ {thai_date}\n\n"
     for event in events:
         summary = event.get("summary", "(ไม่มีชื่อกิจกรรม)")
         location = event.get("location", "-")
-        if "dateTime" in event["start"]:
-            st = datetime.datetime.fromisoformat(event["start"]["dateTime"]).astimezone(BANGKOK_TZ)
-            en = datetime.datetime.fromisoformat(event["end"]["dateTime"]).astimezone(BANGKOK_TZ)
-            time_str = f"{st.strftime('%H:%M')} - {en.strftime('%H:%M')} น."
+        start = event.get("start", {})
+        if "dateTime" in start:
+            st = datetime.datetime.fromisoformat(start["dateTime"]).astimezone(BANGKOK_TZ)
+            time_str = st.strftime('%H:%M น.')
         else:
             time_str = "ตลอดทั้งวัน"
         msg += f"📌 กิจกรรม: {summary}\n📍 สถานที่: {location}\n🕒 เวลา: {time_str}\n\n"
     return msg.strip()
 
-def get_image_url() -> str | None:
-    fixed_url = os.environ.get("REMINDER_IMAGE_URL", "").strip()
-    if fixed_url:
-        return fixed_url
-    image_map_path = os.path.join(os.path.dirname(__file__), "image_by_weekday.json")
-    if os.path.exists(image_map_path):
-        with open(image_map_path, "r", encoding="utf-8") as f:
-            image_map = json.load(f)
-        today_key = THAI_WEEKDAYS[now_in_bangkok().weekday()]
-        return image_map.get(today_key)
-    return None
-
-def build_messages(task_text: str) -> list:
-    messages = [{"type": "text", "text": task_text}]
-    image_url = get_image_url()
-    if image_url:
-        messages.append({
-            "type": "image",
-            "originalContentUrl": image_url,
-            "previewImageUrl": image_url,
-        })
-    return messages
-
-def send_line_push(access_token: str, to: str, messages: list) -> None:
-    # ทำความสะอาดค่า Token ป้องกันช่องว่างและตัวอักษรแปลกปลอม
-    clean_token = "".join(access_token.split())
-    clean_to = "".join(to.split())
+def send_line(token, user_id, text):
+    # ล้างค่าอีกครั้งก่อนส่งเพื่อความชัวร์
+    token = clean_secret(token)
+    user_id = clean_secret(user_id)
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {clean_token}",
+        "Authorization": f"Bearer {token}"
     }
-    payload = {"to": clean_to, "messages": messages}
+    payload = {
+        "to": user_id,
+        "messages": [{"type": "text", "text": text}]
+    }
+    
+    # เพิ่มรูปภาพ (ถ้ามี)
+    img_url = os.environ.get("REMINDER_IMAGE_URL", "").strip()
+    if img_url:
+        payload["messages"].append({
+            "type": "image",
+            "originalContentUrl": img_url,
+            "previewImageUrl": img_url
+        })
+
+    print(f"[DEBUG] กำลังส่งข้อความ... (Token Length: {len(token)})")
     resp = requests.post(LINE_PUSH_URL, headers=headers, json=payload, timeout=15)
+    
     if resp.status_code != 200:
-        print(f"[ERROR] LINE API ตอบกลับ {resp.status_code}: {resp.text}", file=sys.stderr)
+        print(f"[ERROR] LINE API ตอบกลับ {resp.status_code}: {resp.text}")
         sys.exit(1)
-    print("[OK] ส่งข้อความแจ้งเตือนสำเร็จ")
+    print("[OK] ส่งข้อความสำเร็จ!")
 
 def main():
-    # ดึงค่าและล้างค่าขยะทันที
-    access_token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-    user_id = os.environ.get("LINE_USER_ID", "").strip()
-    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-    calendar_id = os.environ.get("GOOGLE_CALENDAR_ID", "").strip()
+    print("--- เริ่มทำงาน (VERSION 5) ---")
+    
+    # ดึงค่าและล้างทันที
+    token = clean_secret(os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", ""))
+    user_id = clean_secret(os.environ.get("LINE_USER_ID", ""))
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    cal_id = os.environ.get("GOOGLE_CALENDAR_ID", "").strip()
 
-    if not all([access_token, user_id, service_account_json, calendar_id]):
-        print(f"[ERROR] ตั้งค่า Environment Variables ไม่ครบถ้วน", file=sys.stderr)
+    if not all([token, user_id, sa_json, cal_id]):
+        print("[ERROR] ข้อมูล Environment Variables ไม่ครบ")
         sys.exit(1)
 
-    events = fetch_todays_events(service_account_json, calendar_id)
-    task_text = build_task_text(events)
-    messages = build_messages(task_text)
-    send_line_push(access_token, user_id, messages)
+    try:
+        events = fetch_todays_events(sa_json, cal_id)
+        msg_text = build_message(events)
+        send_line(token, user_id, msg_text)
+    except Exception as e:
+        print(f"[ERROR] เกิดข้อผิดพลาด: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
