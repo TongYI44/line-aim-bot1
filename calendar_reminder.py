@@ -58,19 +58,20 @@ def extract_room(event):
     หาชื่อ 'ห้อง' ของกิจกรรม โดยลองตามลำดับนี้:
     1. ห้องที่ถูกจองผ่าน Google Calendar Rooms/Resources
        (ปรากฏใน attendees ที่มี resource: true)
-    2. รูปแบบคำว่า 'ห้อง...' ที่ปรากฏใน location / summary / description
+    2. ค่าจากช่อง Location โดยตรง (ผู้ใช้ใช้ช่องนี้เก็บชื่อ/เลขห้องอยู่แล้ว
+       ไม่จำเป็นต้องมีคำว่า 'ห้อง' นำหน้า เช่น '301', 'A', 'ห้องประชุมใหญ่')
+    3. รูปแบบคำว่า 'ห้อง...' ที่ปรากฏใน summary / description (เผื่อพิมพ์แทรกไว้ตรงนั้น)
     """
     for attendee in event.get("attendees", []):
         if attendee.get("resource"):
             return attendee.get("displayName") or attendee.get("email", "-")
 
-    text_fields = [
-        event.get("location", ""),
-        event.get("summary", ""),
-        event.get("description", ""),
-    ]
+    location = event.get("location", "").strip()
+    if location:
+        return location
+
     room_pattern = re.compile(r"ห้อง\s*[\wก-๙\.\-/]+")
-    for text in text_fields:
+    for text in [event.get("summary", ""), event.get("description", "")]:
         if not text:
             continue
         match = room_pattern.search(text)
@@ -90,7 +91,6 @@ def build_message(events):
     msg = f"📅 แจ้งเตือนตารางงาน\n\n📆 วันที่ {thai_date}\n\n"
     for event in events:
         summary = event.get("summary", "(ไม่มีชื่อกิจกรรม)")
-        location = event.get("location", "-")
         room = extract_room(event)
         start = event.get("start", {})
         if "dateTime" in start:
@@ -101,7 +101,6 @@ def build_message(events):
         msg += (
             f"📌 กิจกรรม: {summary}\n"
             f"🚪 ห้อง: {room}\n"
-            f"📍 สถานที่: {location}\n"
             f"🕒 เวลา: {time_str}\n\n"
         )
     return msg.strip()
